@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const POP_TRIGGER_VAL = 1.2
+const POP_TRIGGER_VAL = 2
 
 type StationID uuid.UUID
 type StationUpdateData struct {
@@ -115,6 +115,8 @@ func (s *Station) SendGroupUpdate(self *actor.Actor) {
 		Popularity: s.Popularity,
 	}
 
+	fmt.Println("OCCP: ", data.Occupation)
+
 	reply := com.NewGroupMessage[StationUpdateData]("StationUpdateData", self.GetGroup("SimControlGroup").ID, &data)
 	err := actor.ActorSendMessageJson(self, reply)
 	if err != nil {
@@ -136,12 +138,14 @@ func (s *Station) MakeBikeDrive(self *actor.Actor, bike BikeID, tostation uuid.U
 	KPI.Mutex.Lock()
 	KPI.BikeInDrive++
 	KPI.Mutex.Unlock()
+	fmt.Println("Bike lent")
 
 	time.Sleep(8 * time.Second)
 
 	KPI.Mutex.Lock()
 	KPI.BikeInDrive--
 	KPI.Mutex.Unlock()
+	fmt.Println("Bike back to station")
 
 	msg := com.NewDirectMessage[BikeID]("ReceiveBike", tostation, &bike)
 	err := actor.ActorSendMessage(self, msg)
@@ -167,7 +171,7 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 
 	rand.Seed(time.Now().UnixNano())
 
-	v := rand.Intn(capacity)
+	v := rand.Intn(capacity-3) + 3
 	for i := 0; i < v; i++ {
 		s.Slots[i] = BikeID(uuid.New())
 	}
@@ -192,8 +196,10 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			if station.PopCounter > POP_TRIGGER_VAL {
 				station.SendGroupUpdate(self)
 				station.PopCounter = 0
+
+			req:
 				station.RequestStationPopularity(self)
-				time.Sleep(2 * time.Second)
+				time.Sleep(15 * time.Second)
 
 				station.SlotsMutex.Lock()
 
@@ -210,11 +216,11 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 					pops += popularity.ToAttraction
 				}
 
-				trigger *= pops / float64(len(station.StationPopularities))
+				trigger *= pops / float64(len(station.StationPopularities)) / 2
 				for i, popularity := range station.StationPopularities {
+					backup = i
 					if popularity.ToAttraction > trigger {
 						id = i
-						backup = i
 					}
 				}
 
@@ -222,11 +228,16 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 					id = backup
 				}
 
+				if id == uuid.Nil {
+					goto req
+				}
+
 				bike := BikeID(uuid.Nil)
 				for i, slot := range station.Slots {
 					if slot != BikeID(uuid.Nil) {
 						bike = slot
 						station.Slots[i] = BikeID(uuid.Nil)
+						break
 					}
 				}
 

@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	client := com.NewMqttClient("tcp://127.0.0.1:1883", true, 2)
+	client := com.NewMqttClient("tcp://127.0.0.1:1883", false, 2)
 	err := client.ConnectSync()
 	if err != nil {
 		return

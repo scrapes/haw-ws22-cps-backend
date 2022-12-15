@@ -246,19 +246,19 @@ func CreateSimulation(client *com.MqttClient) *Simulation {
 	poiBarclaysArena := NewPOI(sim.MqttClient, sim.SimGroup, "Barclays Arena", Coordinate{53.589357924013065, 9.899143208616863}, 0.3, 0.1)
 	sim.Pois[poiBarclaysArena.Name] = poiBarclaysArena
 
-	poiSStellingen := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Stellingen", Coordinate{53.589973247084004, 9.918811914968728}, CONST_poi_sstation_weight, CONST_poi_sstation_weight)
+	poiSStellingen := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Stellingen", Coordinate{53.589973247084004, 9.918811914968728}, CONST_poi_sstation_to_weight, CONST_poi_sstation_from_weight)
 	sim.Pois[poiSStellingen.Name] = poiSStellingen
 
-	poiSEidelstedt := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Eidelstedt", Coordinate{53.59593368989732, 9.906587127274884}, CONST_poi_sstation_weight, CONST_poi_sstation_weight)
+	poiSEidelstedt := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Eidelstedt", Coordinate{53.59593368989732, 9.906587127274884}, CONST_poi_sstation_to_weight, CONST_poi_sstation_from_weight)
 	sim.Pois[poiSEidelstedt.Name] = poiSEidelstedt
 
-	poiSElbgaustrasse := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Elbgaustrasse", Coordinate{53.602724437413244, 9.892021694621539}, CONST_poi_sstation_weight, CONST_poi_sstation_weight)
+	poiSElbgaustrasse := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Elbgaustrasse", Coordinate{53.602724437413244, 9.892021694621539}, CONST_poi_sstation_to_weight, CONST_poi_sstation_from_weight)
 	sim.Pois[poiSElbgaustrasse.Name] = poiSElbgaustrasse
 
-	poiSLangenfelde := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Langenfelde", Coordinate{53.579767351704206, 9.930222519436683}, CONST_poi_sstation_weight, CONST_poi_sstation_weight)
+	poiSLangenfelde := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Langenfelde", Coordinate{53.579767351704206, 9.930222519436683}, CONST_poi_sstation_to_weight, CONST_poi_sstation_from_weight)
 	sim.Pois[poiSLangenfelde.Name] = poiSLangenfelde
 
-	poiSBahrenfeld := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Bahrenfeld", Coordinate{53.56014781227735, 9.910238735667162}, CONST_poi_sstation_weight, CONST_poi_sstation_weight)
+	poiSBahrenfeld := NewPOI(sim.MqttClient, sim.SimGroup, "S-Bahn Bahrenfeld", Coordinate{53.56014781227735, 9.910238735667162}, CONST_poi_sstation_to_weight, CONST_poi_sstation_from_weight)
 	sim.Pois[poiSBahrenfeld.Name] = poiSBahrenfeld
 
 	poiFriedhofAltona := NewPOI(sim.MqttClient, sim.SimGroup, "Friedhof Altona", Coordinate{53.58389166487952, 9.889299677024592}, 0.45, 0.2)

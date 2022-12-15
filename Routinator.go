@@ -43,15 +43,21 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 	ch := make(chan ResponseMessage)
 	defer close(ch)
 
+	closed := false
+	defer func() { closed = true }()
+
 	req := RequestMessage{
 		UUID: uuid.NewString(),
 		From: from,
 		To:   to,
 	}
 	subid := uuid.New()
+
 	err := route.mqttClient.SubscribeJson(route.getResponseTopic(req.UUID), reflect.TypeOf(ResponseMessage{}), com.SubCallback{ID: subid, Callback: func(msg reflect.Value) {
 		reflect.ValueOf(func(message *ResponseMessage) {
-			ch <- *message
+			if !closed {
+				ch <- *message
+			}
 		}).Call([]reflect.Value{msg})
 
 		route.mqttClient.Unsubscribe(route.getResponseTopic(req.UUID), subid)
@@ -62,7 +68,7 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 		return nil
 	}
 
-	success := 5
+	success := 20
 	for success > 0 {
 		fmt.Println("Request Route")
 		err2 := route.mqttClient.PublishJson(route.getRequestTopic(), req)
@@ -74,7 +80,7 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 			return msg.Route
 		case <-time.After(5 * time.Second):
 			success--
-
+			fmt.Println("Retrying route")
 		}
 	}
 	return nil
