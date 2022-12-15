@@ -5,6 +5,7 @@ import (
 	"github.com/google/uuid"
 	"gitlab.com/anwski/crude-go-actors/com"
 	"reflect"
+	"time"
 )
 
 type RequestMessage struct {
@@ -40,6 +41,7 @@ func (route *Routinator) getResponseTopic(uuid string) string {
 
 func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 	ch := make(chan ResponseMessage)
+	defer close(ch)
 
 	req := RequestMessage{
 		UUID: uuid.NewString(),
@@ -57,16 +59,23 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 
 	if err != nil {
 		fmt.Println(err)
-		close(ch)
 		return nil
 	}
 
-	err2 := route.mqttClient.PublishJson(route.getRequestTopic(), req)
-	if err2 != nil {
-		return nil
-	}
+	success := 5
+	for success > 0 {
+		fmt.Println("Request Route")
+		err2 := route.mqttClient.PublishJson(route.getRequestTopic(), req)
+		if err2 != nil {
+			return nil
+		}
+		select {
+		case msg := <-ch:
+			return msg.Route
+		case <-time.After(5 * time.Second):
+			success--
 
-	msg := <-ch
-	close(ch)
-	return msg.Route
+		}
+	}
+	return nil
 }

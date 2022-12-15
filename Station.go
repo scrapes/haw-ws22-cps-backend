@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const POP_TRIGGER_VAL = 1.2
+
 type StationID uuid.UUID
 type StationUpdateData struct {
 	ID         uuid.UUID
@@ -17,7 +19,7 @@ type StationUpdateData struct {
 	Name       string
 	Capacity   int
 	Occupation int
-	Popularity float64
+	Popularity Popularity
 }
 type StationInfo struct {
 	ID       StationID
@@ -25,16 +27,18 @@ type StationInfo struct {
 }
 
 type Station struct {
-	Info        StationInfo
-	Name        string
-	Capacity    int
-	Bias        float64
-	Popularity  float64 // Between 0..1 as weight
-	Slots       []BikeID
-	Popularises map[uuid.UUID]float64
-	SlotsMutex  sync.Mutex
-	PopMutex    sync.Mutex
-	Actor       *actor.Actor
+	Info                StationInfo
+	Name                string
+	Capacity            int
+	Bias                float64
+	Popularity          Popularity // Between 0..1 as weight
+	Slots               []BikeID
+	PoiPopularities     map[uuid.UUID]Popularity
+	StationPopularities map[uuid.UUID]Popularity
+	SlotsMutex          sync.Mutex
+	PopMutex            sync.Mutex
+	PopCounter          float64
+	Actor               *actor.Actor
 }
 
 func (s *Station) GetLoad() int {
@@ -82,10 +86,13 @@ func (s *Station) SendABike(id PodID) {
 	}
 }
 
-func (s *Station) CalculatePopularity() float64 {
-	popularity := float64(0)
-	for _, pop := range s.Popularises {
-		popularity += pop
+func (s *Station) CalculatePopularity() Popularity {
+	popularity := Popularity{
+		ToAttraction:   0,
+		FromAttraction: 0,
+	}
+	for _, pop := range s.PoiPopularities {
+		popularity = pop.Add(popularity)
 	}
 	return popularity
 }
@@ -97,25 +104,78 @@ func (s *Station) RequestPopularity() {
 		return
 	}
 }
-func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias float64, pop float64) *Station {
+
+func (s *Station) SendGroupUpdate(self *actor.Actor) {
+	data := StationUpdateData{
+		ID:         uuid.UUID(s.Info.ID),
+		Location:   s.Info.Location,
+		Name:       s.Name,
+		Capacity:   s.Capacity,
+		Occupation: s.GetLoad(),
+		Popularity: s.Popularity,
+	}
+
+	reply := com.NewGroupMessage[StationUpdateData]("StationUpdateData", self.GetGroup("SimControlGroup").ID, &data)
+	err := actor.ActorSendMessageJson(self, reply)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func (s *Station) RequestStationPopularity(self *actor.Actor) {
+	b := byte(0)
+	s.StationPopularities = make(map[uuid.UUID]Popularity)
+	err := actor.ActorSendMessage[byte](self, com.NewGroupMessage("StationRequestPopularity", self.GetGroup("SimControlGroup").ID, &b))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+}
+
+func (s *Station) MakeBikeDrive(self *actor.Actor, bike BikeID, tostation uuid.UUID) {
+	KPI.Mutex.Lock()
+	KPI.BikeInDrive++
+	KPI.Mutex.Unlock()
+
+	time.Sleep(8 * time.Second)
+
+	KPI.Mutex.Lock()
+	KPI.BikeInDrive--
+	KPI.Mutex.Unlock()
+
+	msg := com.NewDirectMessage[BikeID]("ReceiveBike", tostation, &bike)
+	err := actor.ActorSendMessage(self, msg)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias float64, pop Popularity) *Station {
 	s := Station{
-		Info:        StationInfo{},
-		Name:        name,
-		Capacity:    capacity,
-		Bias:        bias,
-		Popularity:  pop,
-		Slots:       make([]BikeID, capacity),
-		SlotsMutex:  sync.Mutex{},
-		Actor:       actor.NewActor(sim.MqttClient, name),
-		Popularises: make(map[uuid.UUID]float64),
-		PopMutex:    sync.Mutex{},
+		Info:                StationInfo{},
+		Name:                name,
+		Capacity:            capacity,
+		Bias:                bias,
+		Popularity:          pop,
+		Slots:               make([]BikeID, capacity),
+		SlotsMutex:          sync.Mutex{},
+		Actor:               actor.NewActor(sim.MqttClient, name),
+		PoiPopularities:     make(map[uuid.UUID]Popularity),
+		StationPopularities: make(map[uuid.UUID]Popularity),
+		PopMutex:            sync.Mutex{},
+		PopCounter:          0,
 	}
 
 	rand.Seed(time.Now().UnixNano())
+
 	v := rand.Intn(capacity)
 	for i := 0; i < v; i++ {
 		s.Slots[i] = BikeID(uuid.New())
 	}
+
+	KPI.Mutex.Lock()
+	KPI.BikesTotal += v
+	KPI.Mutex.Unlock()
+
 	s.Info.Location = loc
 	s.Info.ID = (StationID)(s.Actor.ID)
 
@@ -127,18 +187,53 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 		if !ok {
 			_ = fmt.Errorf("assertion of State not okay")
 		} else {
-			data := StationUpdateData{
-				ID:         uuid.UUID(station.Info.ID),
-				Location:   station.Info.Location,
-				Name:       station.Name,
-				Capacity:   station.Capacity,
-				Occupation: station.GetLoad(),
-				Popularity: station.Popularity,
-			}
-			reply := com.NewGroupMessage[StationUpdateData]("StationUpdateData", sim.SimGroup.ID, &data)
-			err := actor.ActorSendMessageJson(self, reply)
-			if err != nil {
-				fmt.Println(err)
+			rand.Seed(time.Now().UnixNano())
+			station.PopCounter += rand.Float64() * station.Popularity.FromAttraction
+			if station.PopCounter > POP_TRIGGER_VAL {
+				station.SendGroupUpdate(self)
+				station.PopCounter = 0
+				station.RequestStationPopularity(self)
+				time.Sleep(2 * time.Second)
+
+				station.SlotsMutex.Lock()
+
+				if station.GetLoad() <= 0 {
+					station.SlotsMutex.Unlock()
+					return
+				}
+
+				trigger := rand.Float64()
+				pops := float64(0)
+				backup := uuid.Nil
+				id := uuid.Nil
+				for _, popularity := range station.StationPopularities {
+					pops += popularity.ToAttraction
+				}
+
+				trigger *= pops / float64(len(station.StationPopularities))
+				for i, popularity := range station.StationPopularities {
+					if popularity.ToAttraction > trigger {
+						id = i
+						backup = i
+					}
+				}
+
+				if id == uuid.Nil {
+					id = backup
+				}
+
+				bike := BikeID(uuid.Nil)
+				for i, slot := range station.Slots {
+					if slot != BikeID(uuid.Nil) {
+						bike = slot
+						station.Slots[i] = BikeID(uuid.Nil)
+					}
+				}
+
+				station.SlotsMutex.Unlock()
+				station.SendGroupUpdate(self)
+				station.MakeBikeDrive(self, bike, id)
+				station.SendGroupUpdate(self)
 			}
 		}
 
@@ -225,12 +320,12 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 		fmt.Println(err4)
 	}
 
-	err5 := s.Actor.AddBehaviour(actor.NewBehaviour[float64]("ReceivePopularity", func(self *actor.Actor, message com.Message[float64]) {
+	err5 := s.Actor.AddBehaviour(actor.NewBehaviour[Popularity]("ReceivePopularity", func(self *actor.Actor, message com.Message[Popularity]) {
 		station, ok := self.State.(*Station)
 		if ok {
 			station.PopMutex.Lock()
 			defer station.PopMutex.Unlock()
-			station.Popularises[message.Sender] = message.Data
+			station.PoiPopularities[message.Sender] = message.Data
 			station.Popularity = station.CalculatePopularity()
 			fmt.Println("[ST]", station.Name, ": ", station.Popularity)
 		}
@@ -248,5 +343,34 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 	if err6 != nil {
 		fmt.Println(err4)
 	}
+
+	err7 := s.Actor.AddBehaviour(actor.NewBehaviour[byte]("StationRequestPopularity", func(self *actor.Actor, message com.Message[byte]) {
+		station, ok := self.State.(*Station)
+		if ok {
+			reply := com.NewDirectMessage[Popularity]("StationReceivePopularity", message.Sender, &station.Popularity)
+			err := actor.ActorSendMessage(self, reply)
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+	}))
+	if err7 != nil {
+		fmt.Println(err4)
+	}
+
+	err8 := s.Actor.AddBehaviour(actor.NewBehaviour[Popularity]("StationReceivePopularity", func(self *actor.Actor, message com.Message[Popularity]) {
+		station, ok := self.State.(*Station)
+		if ok {
+			station.PopMutex.Lock()
+			defer station.PopMutex.Unlock()
+			station.StationPopularities[message.Sender] = message.Data
+		}
+	}))
+	if err8 != nil {
+		fmt.Println(err4)
+	}
+
+	s.SendGroupUpdate(s.Actor)
+
 	return &s
 }
