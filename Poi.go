@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"github.com/google/uuid"
 	"gitlab.com/anwski/crude-go-actors/actor"
 	"gitlab.com/anwski/crude-go-actors/com"
+	"go.uber.org/zap"
 )
 
 const (
@@ -74,7 +74,7 @@ func NewPOI(mqttclient *com.MqttClient, grp *actor.Group, Name string, GeoLoc Co
 	err1 := p.Actor.AddBehaviour(actor.NewBehaviourJson[SimTickMessage]("SimTick", func(self *actor.Actor, message com.Message[SimTickMessage]) {
 		poi, ok := self.GetState().(*Poi)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("state ist not POI")
 		} else {
 			data := PoiUpdate{
 				ID:         uuid.UUID(poi.ID),
@@ -85,13 +85,14 @@ func NewPOI(mqttclient *com.MqttClient, grp *actor.Group, Name string, GeoLoc Co
 			reply := com.NewGroupMessage[PoiUpdate](PoiUpdateData, grp.ID, &data)
 			err := actor.ActorSendMessageJson(self, reply)
 			if err != nil {
-				fmt.Println(err)
+				Logger.Error("send poi update fail", zap.Error(err))
 			}
 		}
 
 	}))
 	if err1 != nil {
-		fmt.Println("Error in Adding behaviour to actor")
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err1))
+		return nil
 	}
 
 	err := p.Actor.AddBehaviour(actor.NewBehaviour[Coordinate](PoiRequestPop, func(self *actor.Actor, message com.Message[Coordinate]) {
@@ -101,11 +102,13 @@ func NewPOI(mqttclient *com.MqttClient, grp *actor.Group, Name string, GeoLoc Co
 			backMessage := com.NewDirectMessage[Popularity]("ReceivePopularity", message.Sender, &weight)
 			err := actor.ActorSendMessage(self, backMessage)
 			if err != nil {
+				Logger.Error("send popularity fail", zap.Error(err))
 				return
 			}
 		}
 	}))
 	if err != nil {
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err))
 		return nil
 	}
 
@@ -116,6 +119,7 @@ func NewPOI(mqttclient *com.MqttClient, grp *actor.Group, Name string, GeoLoc Co
 		}
 	}))
 	if err2 != nil {
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err2))
 		return nil
 	}
 

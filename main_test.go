@@ -7,7 +7,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	cl := com.NewMqttClient("mqtt://127.0.0.1:1883", true, 2)
+	cl := com.NewMqttClient("tcp://localhost:1883", true, 2)
 	err := cl.ConnectSync()
 	if err != nil {
 		return
@@ -16,6 +16,6 @@ func TestMain(m *testing.M) {
 	sim.Start()
 
 	for true {
-		time.Sleep(time.Second)
+		time.Sleep(time.Second * 100)
 	}
 }

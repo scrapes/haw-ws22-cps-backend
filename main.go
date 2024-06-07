@@ -2,11 +2,18 @@ package main
 
 import (
 	"gitlab.com/anwski/crude-go-actors/com"
+	"os"
 	"time"
 )
 
 func main() {
-	client := com.NewMqttClient("tcp://127.0.0.1:1883", false, 2)
+	mqttHost := os.Getenv("MQTT_HOST")
+	if mqttHost == "" {
+		Logger.Error("MQTT_HOST is not set")
+		return
+	}
+
+	client := com.NewMqttClient(mqttHost, false, 2)
 	err := client.ConnectSync()
 	if err != nil {
 		return

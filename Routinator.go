@@ -1,9 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"github.com/google/uuid"
 	"gitlab.com/anwski/crude-go-actors/com"
+	"go.uber.org/zap"
 	"reflect"
 	"time"
 )
@@ -40,6 +40,9 @@ func (route *Routinator) getResponseTopic(uuid string) string {
 }
 
 func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
+	subid := uuid.New()
+
+	Logger.Info("Calculating route", zap.Float64("from lat", from.Latitude), zap.Float64("from long", from.Longitude), zap.Float64("to lat", to.Latitude), zap.Float64("to long", to.Longitude), zap.String("subid", subid.String()))
 	ch := make(chan ResponseMessage)
 	defer close(ch)
 
@@ -51,9 +54,10 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 		From: from,
 		To:   to,
 	}
-	subid := uuid.New()
 
+	Logger.Info("Subscribing", zap.String("subid", req.UUID))
 	err := route.mqttClient.SubscribeJson(route.getResponseTopic(req.UUID), reflect.TypeOf(ResponseMessage{}), com.SubCallback{ID: subid, Callback: func(msg reflect.Value) {
+		Logger.Info("Got Route", zap.String("subid", req.UUID))
 		reflect.ValueOf(func(message *ResponseMessage) {
 			if !closed {
 				ch <- *message
@@ -64,13 +68,13 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 	}})
 
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("Error subscribing", zap.String("subid", req.UUID), zap.Error(err))
 		return nil
 	}
 
 	success := 20
 	for success > 0 {
-		fmt.Println("Request Route")
+		Logger.Info("Waiting for response", zap.String("subid", req.UUID))
 		err2 := route.mqttClient.PublishJson(route.getRequestTopic(), req)
 		if err2 != nil {
 			return nil
@@ -80,7 +84,7 @@ func (route *Routinator) GetRoute(from Coordinate, to Coordinate) []Coordinate {
 			return msg.Route
 		case <-time.After(5 * time.Second):
 			success--
-			fmt.Println("Retrying route")
+			Logger.Error("Timed out waiting for response", zap.String("subid", req.UUID))
 		}
 	}
 	return nil

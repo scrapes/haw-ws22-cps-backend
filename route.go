@@ -50,7 +50,7 @@ func (r *Route) NextPoint() *Coordinate {
 }
 
 func (r *Route) Step(carry float64) {
-	speed := r.Speed / CONST_speed
+	speed := r.Speed
 	if r.Route == nil || r.RouteIndex >= len(r.Route) {
 		return
 	}

@@ -8,17 +8,19 @@ import (
 )
 
 /*
-   "from":{
-     "lat": 53.569039,
-     "lon": 10.101729
-   },
-   "to":{
-     "lat": 53.576482,
-     "lon": 10.081263
-   }
+	"from":{
+	  "lat": 53.569039,
+	  "lon": 10.101729
+	},
+
+	"to":{
+	  "lat": 53.576482,
+	  "lon": 10.081263
+	}
 */
 func TestRoutinator_GetRoute(t *testing.T) {
-	cl := com.NewMqttClient("wss://mqtt.cps.datenspieker.de/mqtt", false, 2)
+	println("AA")
+	cl := com.NewMqttClient("tcp://localhost:1883", false, 2)
 	err := cl.ConnectSync()
 	if err != nil {
 		return

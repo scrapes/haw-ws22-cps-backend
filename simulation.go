@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"github.com/google/uuid"
 	"gitlab.com/anwski/crude-go-actors/actor"
 	"gitlab.com/anwski/crude-go-actors/com"
+	"go.uber.org/zap"
 	"sync"
 	"time"
 )
@@ -73,7 +73,7 @@ func (s *Simulation) Tick(tick int) {
 	time.Sleep(time.Second / time.Duration(s.Configuration.Speed))
 	err := actor.ActorSendMessageJson(s.SimActor, reply)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("error sending tick message", zap.Error(err))
 	}
 }
 
@@ -82,16 +82,17 @@ func (s *Simulation) Start() {
 	resetData := SimControlMessage{Reset: true}
 	resetMsg := com.NewGroupMessage("cmd", s.SimGroup.ID, &resetData)
 	reply := com.NewGroupMessage[SimTickMessage]("SimTick", s.SimGroup.ID, &tick)
+	Logger.Info("Sim speed", zap.Int("speed", s.Configuration.Speed))
 	time.Sleep(time.Second / time.Duration(s.Configuration.Speed))
 
 	er := resetMsg.SendJsonAsName(s.MqttClient, s.SimGroup.Name)
 	if er != nil {
-		fmt.Println(er)
+		Logger.Error("error sending reset message", zap.Error(er))
 	}
 
 	err := actor.ActorSendMessageJson(s.SimActor, reply)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("error sending SimTick message", zap.Error(err))
 	}
 }
 
@@ -103,7 +104,7 @@ func (s *Simulation) SetSpeed(speed int) {
 	time.Sleep(time.Second / time.Duration(s.Configuration.Speed))
 	err := actor.ActorSendMessageJson(s.SimActor, reply)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("error sending SimConfig message", zap.Error(err))
 	}
 }
 
@@ -133,26 +134,26 @@ func CreateSimulation(client *com.MqttClient) *Simulation {
 
 	}))
 	if err != nil {
-		fmt.Println("Error in Adding behaviour to sim actor")
+		Logger.Error("error in Adding behaviour to sim actor", zap.Error(err))
 	}
 
 	// Configuration behaviour
 	err2 := sim.SimActor.AddBehaviour(actor.NewBehaviourJson[SimulationConfig]("ReceiveSimConfig", func(self *actor.Actor, message com.Message[SimulationConfig]) {
 		simulation, ok := self.GetState().(*Simulation)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("error getting simulation state")
 		} else {
 			simulation.Configuration = message.Data
 		}
 	}))
 	if err2 != nil {
-		fmt.Println("Error in Adding behaviour to sim actor")
+		Logger.Error("error in Adding behaviour to sim actor", zap.Error(err2))
 	}
 
 	err3 := sim.SimActor.AddBehaviour(actor.NewBehaviourJson[CreateStationData]("SimCreateStation", func(self *actor.Actor, message com.Message[CreateStationData]) {
 		simulation, ok := self.GetState().(*Simulation)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("error getting simulation state")
 		} else {
 			d := message.Data
 			newStation := NewStation(simulation, d.Name, d.Loc, d.Size, d.Bias, Popularity{
@@ -163,13 +164,13 @@ func CreateSimulation(client *com.MqttClient) *Simulation {
 		}
 	}))
 	if err3 != nil {
-		fmt.Println("Error in Adding behaviour to sim actor")
+		Logger.Error("error in Adding behaviour to sim actor", zap.Error(err3))
 	}
 
 	err4 := sim.SimActor.AddBehaviour(actor.NewBehaviourJson[CreatePodData]("SimCreatePod", func(self *actor.Actor, message com.Message[CreatePodData]) {
 		simulation, ok := self.GetState().(*Simulation)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("error getting simulation state")
 		} else {
 			d := message.Data
 			pd1 := NewPod(simulation, d.Speed, d.Loc, d.Capacity)
@@ -177,13 +178,13 @@ func CreateSimulation(client *com.MqttClient) *Simulation {
 		}
 	}))
 	if err4 != nil {
-		fmt.Println("Error in Adding behaviour to sim actor")
+		Logger.Error("error in Adding behaviour to sim actor", zap.Error(err4))
 	}
 
 	err5 := sim.SimActor.AddBehaviour(actor.NewBehaviourJson[SimSetAttractionMessage]("SimSetAttraction", func(self *actor.Actor, message com.Message[SimSetAttractionMessage]) {
 		simulation, ok := self.GetState().(*Simulation)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("error getting simulation state")
 		} else {
 			d := message.Data
 			simulation.Pois[d.Name].Popularity = d.Popularity
@@ -193,7 +194,7 @@ func CreateSimulation(client *com.MqttClient) *Simulation {
 		}
 	}))
 	if err5 != nil {
-		fmt.Println("Error in Adding behaviour to sim actor")
+		Logger.Error("error in Adding behaviour to sim actor", zap.Error(err5))
 	}
 
 	/*
@@ -236,6 +237,12 @@ func CreateSimulation(client *com.MqttClient) *Simulation {
 
 	pd2 := NewPod(&sim, 150, Coordinate{53.56907457893642, 9.902722536627016}, 10)
 	sim.Pods[pd2.Info.ID] = pd2
+
+	pd3 := NewPod(&sim, 300, Coordinate{53.588532121996714, 9.876192892343472}, 10)
+	sim.Pods[pd3.Info.ID] = pd3
+
+	pd4 := NewPod(&sim, 300, Coordinate{53.56907457893642, 9.902722536627016}, 10)
+	sim.Pods[pd4.Info.ID] = pd4
 
 	/*
 		Load Pois (Train Stations, Stadium, Supermarkets)

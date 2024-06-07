@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"github.com/google/uuid"
 	"gitlab.com/anwski/crude-go-actors/actor"
 	"gitlab.com/anwski/crude-go-actors/com"
+	"go.uber.org/zap"
 	"math/rand"
 	"sync"
 	"time"
@@ -72,8 +72,9 @@ func (s *Station) SendBike(id PodID, bikeID BikeID) {
 	msg := com.NewDirectMessage("ReceiveBike", (uuid.UUID)(id), &bikeID)
 	err := actor.ActorSendMessage(s.Actor, msg)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("Failed to send bike", zap.Error(err))
 	}
+	Logger.Info("sent bike", zap.String("station", s.Name), zap.String("stationID", (uuid.UUID)(s.Info.ID).String()), zap.String("pod", msg.Receiver.String()))
 }
 
 func (s *Station) SendABike(id PodID) {
@@ -100,7 +101,7 @@ func (s *Station) CalculatePopularity() Popularity {
 func (s *Station) RequestPopularity() {
 	err := actor.ActorSendMessage[Coordinate](s.Actor, com.NewGroupMessage(PoiRequestPop, s.Actor.GetGroup("SimControlGroup").ID, &s.Info.Location))
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("failed to send pop request", zap.Error(err))
 		return
 	}
 }
@@ -115,12 +116,12 @@ func (s *Station) SendGroupUpdate(self *actor.Actor) {
 		Popularity: s.Popularity,
 	}
 
-	fmt.Println("OCCP: ", data.Occupation)
+	Logger.Info("occupation", zap.Int("occupation", data.Occupation), zap.String("stationID", data.ID.String()))
 
 	reply := com.NewGroupMessage[StationUpdateData]("StationUpdateData", self.GetGroup("SimControlGroup").ID, &data)
 	err := actor.ActorSendMessageJson(self, reply)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("failed to send group update", zap.Error(err))
 	}
 }
 
@@ -129,7 +130,7 @@ func (s *Station) RequestStationPopularity(self *actor.Actor) {
 	s.StationPopularities = make(map[uuid.UUID]Popularity)
 	err := actor.ActorSendMessage[byte](self, com.NewGroupMessage("StationRequestPopularity", self.GetGroup("SimControlGroup").ID, &b))
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("failed to send group popularity", zap.Error(err))
 		return
 	}
 }
@@ -138,19 +139,19 @@ func (s *Station) MakeBikeDrive(self *actor.Actor, bike BikeID, tostation uuid.U
 	KPI.Mutex.Lock()
 	KPI.BikeInDrive++
 	KPI.Mutex.Unlock()
-	fmt.Println("Bike lent")
+	Logger.Info("bike event", zap.String("station", tostation.String()), zap.String("type", "lent"))
 
 	time.Sleep(8 * time.Second)
 
 	KPI.Mutex.Lock()
 	KPI.BikeInDrive--
 	KPI.Mutex.Unlock()
-	fmt.Println("Bike back to station")
+	Logger.Info("bike event", zap.String("station", tostation.String()), zap.String("type", "received"))
 
 	msg := com.NewDirectMessage[BikeID]("ReceiveBike", tostation, &bike)
 	err := actor.ActorSendMessage(self, msg)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("failed to send bike", zap.Error(err))
 	}
 }
 func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias float64, pop Popularity) *Station {
@@ -189,7 +190,7 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 	err := s.Actor.AddBehaviour(actor.NewBehaviourJson[SimTickMessage]("SimTick", func(self *actor.Actor, message com.Message[SimTickMessage]) {
 		station, ok := self.GetState().(*Station)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("error getting state")
 		} else {
 			rand.Seed(time.Now().UnixNano())
 			station.PopCounter += rand.Float64() * station.Popularity.FromAttraction
@@ -197,60 +198,60 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 				station.SendGroupUpdate(self)
 				station.PopCounter = 0
 
-			req:
-				station.RequestStationPopularity(self)
-				time.Sleep(15 * time.Second)
+				go func() {
+				req:
+					station.RequestStationPopularity(self)
+					time.Sleep(3 * time.Second)
 
-				station.SlotsMutex.Lock()
+					if station.GetLoad() <= 0 {
+						return
+					}
 
-				if station.GetLoad() <= 0 {
+					trigger := rand.Float64()
+					pops := float64(0)
+					backup := uuid.Nil
+					id := uuid.Nil
+					for _, popularity := range station.StationPopularities {
+						pops += popularity.ToAttraction
+					}
+
+					trigger *= pops / float64(len(station.StationPopularities)) / 2
+					for i, popularity := range station.StationPopularities {
+						backup = i
+						if popularity.ToAttraction > trigger {
+							id = i
+						}
+					}
+
+					if id == uuid.Nil {
+						id = backup
+					}
+
+					if id == uuid.Nil {
+						goto req
+					}
+
+					station.SlotsMutex.Lock()
+					bike := BikeID(uuid.Nil)
+					for i, slot := range station.Slots {
+						if slot != BikeID(uuid.Nil) {
+							bike = slot
+							station.Slots[i] = BikeID(uuid.Nil)
+							break
+						}
+					}
+
 					station.SlotsMutex.Unlock()
-					return
-				}
-
-				trigger := rand.Float64()
-				pops := float64(0)
-				backup := uuid.Nil
-				id := uuid.Nil
-				for _, popularity := range station.StationPopularities {
-					pops += popularity.ToAttraction
-				}
-
-				trigger *= pops / float64(len(station.StationPopularities)) / 2
-				for i, popularity := range station.StationPopularities {
-					backup = i
-					if popularity.ToAttraction > trigger {
-						id = i
-					}
-				}
-
-				if id == uuid.Nil {
-					id = backup
-				}
-
-				if id == uuid.Nil {
-					goto req
-				}
-
-				bike := BikeID(uuid.Nil)
-				for i, slot := range station.Slots {
-					if slot != BikeID(uuid.Nil) {
-						bike = slot
-						station.Slots[i] = BikeID(uuid.Nil)
-						break
-					}
-				}
-
-				station.SlotsMutex.Unlock()
-				station.SendGroupUpdate(self)
-				station.MakeBikeDrive(self, bike, id)
-				station.SendGroupUpdate(self)
+					station.SendGroupUpdate(self)
+					station.MakeBikeDrive(self, bike, id)
+					station.SendGroupUpdate(self)
+				}()
 			}
 		}
 
 	}))
 	if err != nil {
-		fmt.Println("Error in Adding behaviour to actor")
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err))
 	}
 
 	err1 := s.Actor.AddBehaviour(actor.NewBehaviour[int]("RequestLoad", func(self *actor.Actor, message com.Message[int]) {
@@ -260,15 +261,15 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			msg := com.NewDirectMessage[float64]("ReceiveLoad", message.Sender, &load)
 			err := actor.ActorSendMessage(self, msg)
 			if err != nil {
-				fmt.Println(err)
+				Logger.Error("Error in Sending Load", zap.Error(err))
 			}
-			fmt.Println(station.Name, " : ", load)
+			Logger.Info("Station Load", zap.Float64("load", load), zap.String("name", station.Name))
 		} else {
-			_ = fmt.Errorf("error in station type conversion")
+			Logger.Error("error getting state")
 		}
 	}))
 	if err1 != nil {
-		fmt.Println(err)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err1))
 	}
 
 	err2 := s.Actor.AddBehaviour(actor.NewBehaviour[BikeID]("ReceiveBike", func(self *actor.Actor, message com.Message[BikeID]) {
@@ -280,11 +281,11 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			}
 			station.SlotsMutex.Unlock()
 		} else {
-			_ = fmt.Errorf("error in station type conversion")
+			Logger.Error("error getting state")
 		}
 	}))
 	if err2 != nil {
-		fmt.Println(err2)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err2))
 	}
 
 	err3 := s.Actor.AddBehaviour(actor.NewBehaviour[int]("RequestLocation", func(self *actor.Actor, message com.Message[int]) {
@@ -293,14 +294,14 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			msg := com.NewDirectMessage("ReceiveLocation", message.Sender, &station.Info.Location)
 			err := actor.ActorSendMessage(self, msg)
 			if err != nil {
-				fmt.Println(err)
+				Logger.Error("Error in Sending Location", zap.Error(err))
 			}
 		} else {
-			_ = fmt.Errorf("error in station type conversion")
+			Logger.Error("error getting state")
 		}
 	}))
 	if err3 != nil {
-		fmt.Println(err3)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err3))
 	}
 
 	err4 := s.Actor.AddBehaviour(actor.NewBehaviour[int]("RequestBikes", func(self *actor.Actor, message com.Message[int]) {
@@ -311,7 +312,7 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			if dSoll < 0 {
 				dSoll = 0
 			}
-			fmt.Println(station.Name, " Sending ", dSoll, " Bikes")
+			Logger.Info("sending bike", zap.String("station", station.Name), zap.String("stationID", (uuid.UUID)(station.Info.ID).String()), zap.Int("count", dSoll))
 			if dSoll > message.Data {
 				dSoll = message.Data
 			} else if dSoll <= 0 {
@@ -324,11 +325,11 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			}
 			station.SlotsMutex.Unlock()
 		} else {
-			_ = fmt.Errorf("error in station type conversion")
+			Logger.Error("error getting state")
 		}
 	}))
 	if err4 != nil {
-		fmt.Println(err4)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err4))
 	}
 
 	err5 := s.Actor.AddBehaviour(actor.NewBehaviour[Popularity]("ReceivePopularity", func(self *actor.Actor, message com.Message[Popularity]) {
@@ -338,11 +339,11 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			defer station.PopMutex.Unlock()
 			station.PoiPopularities[message.Sender] = message.Data
 			station.Popularity = station.CalculatePopularity()
-			fmt.Println("[ST]", station.Name, ": ", station.Popularity)
+			Logger.Info("Station Popularity", zap.String("name", station.Name), zap.Float64("Attraction", station.Popularity.ToAttraction), zap.Float64("Repulsion", station.Popularity.ToAttraction))
 		}
 	}))
 	if err5 != nil {
-		fmt.Println(err4)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err5))
 	}
 
 	err6 := s.Actor.AddBehaviour(actor.NewBehaviour[int]("UpdatePopularity", func(self *actor.Actor, message com.Message[int]) {
@@ -352,7 +353,7 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 		}
 	}))
 	if err6 != nil {
-		fmt.Println(err4)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err6))
 	}
 
 	err7 := s.Actor.AddBehaviour(actor.NewBehaviour[byte]("StationRequestPopularity", func(self *actor.Actor, message com.Message[byte]) {
@@ -361,12 +362,12 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 			reply := com.NewDirectMessage[Popularity]("StationReceivePopularity", message.Sender, &station.Popularity)
 			err := actor.ActorSendMessage(self, reply)
 			if err != nil {
-				fmt.Println(err)
+				Logger.Error("Error in Sending Popularity", zap.Error(err))
 			}
 		}
 	}))
 	if err7 != nil {
-		fmt.Println(err4)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err7))
 	}
 
 	err8 := s.Actor.AddBehaviour(actor.NewBehaviour[Popularity]("StationReceivePopularity", func(self *actor.Actor, message com.Message[Popularity]) {
@@ -378,7 +379,7 @@ func NewStation(sim *Simulation, name string, loc Coordinate, capacity int, bias
 		}
 	}))
 	if err8 != nil {
-		fmt.Println(err4)
+		Logger.Error("Error in Adding behaviour to actor", zap.Error(err8))
 	}
 
 	s.SendGroupUpdate(s.Actor)

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"github.com/google/uuid"
 	"gitlab.com/anwski/crude-go-actors/actor"
 	"gitlab.com/anwski/crude-go-actors/com"
+	"go.uber.org/zap"
 	"sync"
 )
 
@@ -13,9 +13,11 @@ type PodInfo struct {
 	ID       uuid.UUID
 	Location Coordinate
 	State    string
+	Capacity int
+	Used     int
 }
 type PodWorkData struct {
-	StationLoad      map[StationID]float64
+	StationLoad      map[float64]StationID
 	StationLoadMutex sync.Mutex
 	TickTimeout      int
 	LastStation      StationID
@@ -39,10 +41,12 @@ func (pod *Pod) NavigateTo(loc Coordinate, rtn Routinator) {
 }
 
 func (pod *Pod) IsEmpty() bool {
+	usage := 0
 	empty := true
 	for _, slot := range pod.Slots {
 		if slot != (BikeID)(uuid.Nil) {
 			empty = false
+			usage += 1
 		}
 	}
 	return empty
@@ -54,7 +58,7 @@ func (pod *Pod) RequestCapacities() {
 		msg := com.NewGroupMessage[int]("RequestLoad", group.ID, &pod.Data.TickTimeout)
 		err := actor.ActorSendMessage(pod.Actor, msg)
 		if err != nil {
-			fmt.Println(err)
+			Logger.Error("Error sending RequestLoad Message", zap.Error(err))
 		}
 		pod.Info.State = "WaitingForLoad"
 	}
@@ -75,15 +79,15 @@ func (pod *Pod) CalculateTick(currentTick int) {
 				msg := com.NewDirectMessage("RequestBikes", (uuid.UUID)(pod.NextStop.ID), &pod.Capacity)
 				err := actor.ActorSendMessage(pod.Actor, msg)
 				if err != nil {
-					fmt.Println(err)
+					Logger.Error("Error sending RequestBikes Message", zap.Error(err))
 				}
-				pod.Data.TickTimeout = currentTick + (5 * CONST_speed)
+				pod.Data.TickTimeout = currentTick + (5 * (1 / CONST_speed))
 				pod.Info.State = "WaitingForLoading"
 			}
 
 		}
 	} else if pod.Info.State == "Dumped" {
-		pod.Data.TickTimeout = currentTick + (5 * CONST_speed) // timeout to 5 seconds
+		pod.Data.TickTimeout = currentTick + (5 * (1 / CONST_speed)) // timeout to 5 seconds
 		pod.RequestCapacities()
 
 	} else if pod.Info.State == "WaitingForLoad" {
@@ -92,8 +96,7 @@ func (pod *Pod) CalculateTick(currentTick int) {
 			if pod.IsEmpty() {
 				// find fullest station
 				capacity := float64(-1)
-				for id, sCapacity := range pod.Data.StationLoad {
-					fmt.Println("fullest", sCapacity, capacity)
+				for sCapacity, id := range pod.Data.StationLoad {
 					if sCapacity > capacity && pod.Data.LastStation != id {
 						capacity = sCapacity
 						station = id
@@ -102,8 +105,7 @@ func (pod *Pod) CalculateTick(currentTick int) {
 			} else {
 				// find emptiest station
 				capacity := float64(2)
-				for id, sCapacity := range pod.Data.StationLoad {
-					fmt.Println("emptiest", sCapacity, capacity)
+				for sCapacity, id := range pod.Data.StationLoad {
 					if sCapacity < capacity && id != pod.Data.LastStation {
 						capacity = sCapacity
 						station = id
@@ -111,12 +113,14 @@ func (pod *Pod) CalculateTick(currentTick int) {
 				}
 			}
 
-			fmt.Println("[POD]", "Next Station: ", station)
+			pod.Data.StationLoad = make(map[float64]StationID)
+
+			Logger.Info("Next Station", zap.String("PodID", pod.Info.ID.String()), zap.String("StationID", (uuid.UUID)(station).String()))
 
 			msg := com.NewDirectMessage[int]("RequestLocation", (uuid.UUID)(station), &currentTick)
 			err := actor.ActorSendMessage(pod.Actor, msg)
 			if err != nil {
-				fmt.Println(err)
+				Logger.Error("Error sending RequestLocation Message", zap.Error(err))
 			}
 
 			pod.Info.State = "WaitingForCoords"
@@ -126,7 +130,7 @@ func (pod *Pod) CalculateTick(currentTick int) {
 			pod.RequestCapacities()
 		}
 	} else {
-		pod.Data.TickTimeout = currentTick + (5 * CONST_speed) // timeout to 5 seconds
+		pod.Data.TickTimeout = currentTick + (5 * (1 / CONST_speed)) // timeout to 5 seconds
 		pod.RequestCapacities()
 	}
 
@@ -135,18 +139,18 @@ func (pod *Pod) CalculateTick(currentTick int) {
 		msg := com.NewGroupMessage("PodUpdate", grp.ID, &pod.Info)
 		err := actor.ActorSendMessageJson(pod.Actor, msg)
 		if err != nil {
-			fmt.Println(err)
+			Logger.Error("Error sending PodUpdate Message", zap.Error(err))
 		}
 	}
 
 }
 
 func (pod *Pod) SendBike(bid BikeID, sid StationID) {
-	fmt.Println("[POD]", "Sending Bike: ", bid)
+	Logger.Info("sending bike", zap.String("podID", pod.Info.ID.String()), zap.String("stationID", (uuid.UUID)(sid).String()), zap.String("bikeID", (uuid.UUID)(bid).String()))
 	msg := com.NewDirectMessage[BikeID]("ReceiveBike", (uuid.UUID)(sid), &bid)
 	err := actor.ActorSendMessage(pod.Actor, msg)
 	if err != nil {
-		fmt.Println(err)
+		Logger.Error("Error sending Bike", zap.Error(err))
 	}
 }
 
@@ -200,7 +204,7 @@ func NewPod(sim *Simulation, speed float64, where Coordinate, capacity int) *Pod
 			Location: where,
 		},
 		Data: PodWorkData{
-			StationLoad:      make(map[StationID]float64),
+			StationLoad:      make(map[float64]StationID),
 			StationLoadMutex: sync.Mutex{},
 			TickTimeout:      0,
 		},
@@ -229,15 +233,15 @@ func NewPod(sim *Simulation, speed float64, where Coordinate, capacity int) *Pod
 	err := p.Actor.AddBehaviour(actor.NewBehaviourJson[SimTickMessage]("SimTick", func(self *actor.Actor, message com.Message[SimTickMessage]) {
 		pod, ok := self.GetState().(*Pod)
 		if !ok {
-			_ = fmt.Errorf("assertion of State not okay")
+			Logger.Error("state is not pod")
 		} else {
 			pod.CalculateTick(message.Data.Tick)
-			fmt.Println(pod.VisualizeSlots(), " CS:", pod.Info.State, "DST: ", pod.Route.GetRemainingDistance())
+			Logger.Info("Pod Slots", zap.String("slots", pod.VisualizeSlots()), zap.String("state", pod.Info.State), zap.Float64("distance", pod.Route.GetRemainingDistance()))
 		}
 	}))
 
 	if err != nil {
-		_ = fmt.Errorf("error adding behaviour to pod actor")
+		Logger.Error("Error adding behaviour to actor", zap.Error(err))
 	}
 
 	// GetLocation Behaviour
@@ -246,7 +250,7 @@ func NewPod(sim *Simulation, speed float64, where Coordinate, capacity int) *Pod
 		if message.Receiver == self.ID {
 			pod, ok := self.GetState().(*Pod)
 			if !ok {
-				_ = fmt.Errorf("assertion of State not okay")
+				Logger.Error("state is not pod")
 			} else {
 				pod.Data.LastStation = (StationID)(message.Sender)
 				pod.NextStop.Location = message.Data
@@ -265,7 +269,7 @@ func NewPod(sim *Simulation, speed float64, where Coordinate, capacity int) *Pod
 	}))
 
 	if err2 != nil {
-		_ = fmt.Errorf("error adding behaviour to pod actor")
+		Logger.Error("Error adding behaviour to actor", zap.Error(err2))
 	}
 
 	err3 := p.Actor.AddBehaviour(actor.NewBehaviour[float64]("ReceiveLoad", func(self *actor.Actor, message com.Message[float64]) {
@@ -273,31 +277,32 @@ func NewPod(sim *Simulation, speed float64, where Coordinate, capacity int) *Pod
 		if message.Receiver == self.ID {
 			pod, ok := self.GetState().(*Pod)
 			if !ok {
-				_ = fmt.Errorf("assertion of State not okay")
+				Logger.Error("state is not pod")
 			} else {
 				data := message.Data
 				pod.Data.StationLoadMutex.Lock()
-				pod.Data.StationLoad[(StationID)(message.Sender)] = data
+				pod.Data.StationLoad[data] = (StationID)(message.Sender)
 				pod.Data.StationLoadMutex.Unlock()
 			}
 		}
 	}))
 	if err3 != nil {
-		fmt.Println(err3)
+		Logger.Error("Error adding behaviour to actor", zap.Error(err3))
 	}
 
 	err4 := p.Actor.AddBehaviour(actor.NewBehaviour[BikeID]("ReceiveBike", func(self *actor.Actor, message com.Message[BikeID]) {
+		Logger.Info("receive bike", zap.String("pod", message.Receiver.String()), zap.String("bike", (uuid.UUID)(message.Data).String()))
 		if message.Receiver == self.ID {
 			pod, ok := self.GetState().(*Pod)
 			if !ok {
-				_ = fmt.Errorf("assertion of State not okay")
+				Logger.Error("state is not pod")
 			} else {
 				pod.SlotMutex.Lock()
 				if !pod.StoreBike(message.Data) {
 					// if pod is full, send back bike
 					pod.SendBike(message.Data, StationID(message.Sender))
 				} else {
-					fmt.Println("[POD]", "Recieved Bike: ", message.Data)
+					Logger.Info("Received bike", zap.String("podID", self.ID.String()), zap.String("bikeID", (uuid.UUID)(message.Data).String()))
 				}
 				pod.Data.LastStation = StationID(message.Sender)
 				pod.SlotMutex.Unlock()
@@ -306,7 +311,7 @@ func NewPod(sim *Simulation, speed float64, where Coordinate, capacity int) *Pod
 	}))
 
 	if err4 != nil {
-		fmt.Println(err4)
+		Logger.Error("Error adding behaviour to actor", zap.Error(err4))
 	}
 
 	return &p
