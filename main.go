@@ -1,7 +1,7 @@
 package main
 
 import (
-	"gitlab.com/anwski/crude-go-actors/com"
+	"github.com/scrapes/haw-ws22-cps-crude-go-actors/com"
 	"os"
 	"time"
 )

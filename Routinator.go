@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/google/uuid"
-	"gitlab.com/anwski/crude-go-actors/com"
+	"github.com/scrapes/haw-ws22-cps-crude-go-actors/com"
 	"go.uber.org/zap"
 	"reflect"
 	"time"
